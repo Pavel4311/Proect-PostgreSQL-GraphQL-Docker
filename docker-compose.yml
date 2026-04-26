@@ -1,0 +1,37 @@
+services:
+  db:
+    image: postgres:16-alpine
+    container_name: pg-mini-db
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: puk454545
+      POSTGRES_DB: learnsql
+    ports:
+      - "5432:5432"
+    volumes:
+      - pg_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d learnsql"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  api:
+    build: .
+    container_name: pg-mini-api
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      DB_HOST: db
+      DB_PORT: "5432"
+      DB_USER: postgres
+      DB_PASSWORD: puk454545
+      DB_NAME: learnsql
+      PORT: "3000"
+      NODE_ENV: production
+    ports:
+      - "3000:3000"
+
+volumes:
+  pg_data:
