@@ -2,6 +2,8 @@ const express = require("express");
 const router = express.Router();
 const { createTable, dropTable, updateTable } = require("../db/migrations");
 const pool = require("../db/pool");
+const { validateBody } = require("../middleware/validate");
+const { createUserSchema } = require("../validation/userSchemas");
 
 // Route to create a new table
 router.post("/create-table", async (req, res) => {
@@ -25,32 +27,28 @@ router.delete("/drop-table", async (req, res) => {
   }
 });
 
-router.post("/users", async (req, res) => {
+router.post("/users", validateBody(createUserSchema), async (req, res) => {
   const { name, email, age } = req.body;
 
-  if (!name || !email) {
-    return res.status(400).json({ error: "name и email обязательны" });
-  }
+  // Ручная проверка больше не нужна — Zod уже проверил:
+  // if (!name || !email) ...
 
   try {
     const query = `
         INSERT INTO public.users (name, email, age)
       VALUES ($1, $2, $3)
       RETURNING id, name, email, age, created_at;
-
         `;
     const values = [name, email, age ?? null];
     const result = await pool.query(query, values);
     return res.status(201).json(result.rows[0]);
   } catch (error) {
-    // частая причина: дубликат email из-за UNIQUE
     console.error("INSERT error:", error);
     return res
       .status(500)
       .json({ error: "Ошибка при добавлении пользователя" });
   }
 });
-
 router.get("/users", async (req, res) => {
   try {
     // 1) Добавляем новую строку (тестовые данные)
