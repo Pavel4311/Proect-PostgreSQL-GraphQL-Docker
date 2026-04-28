@@ -16,11 +16,24 @@ services:
       timeout: 3s
       retries: 20
 
+  redis:
+    image: redis:7-alpine
+    container_name: pg-mini-redis
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
   api:
     build: .
     container_name: pg-mini-api
     depends_on:
       db:
+        condition: service_healthy
+      redis:
         condition: service_healthy
     environment:
       DB_HOST: db
@@ -28,6 +41,9 @@ services:
       DB_USER: postgres
       DB_PASSWORD: puk454545
       DB_NAME: learnsql
+      REDIS_HOST: redis
+      REDIS_PORT: "6379"
+      USERS_CACHE_TTL_SEC: "30"
       PORT: "3000"
       NODE_ENV: production
     ports:

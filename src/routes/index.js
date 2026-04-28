@@ -2,8 +2,15 @@ const express = require("express");
 const router = express.Router();
 const { createTable, dropTable, updateTable } = require("../db/migrations");
 const pool = require("../db/pool");
+const { redisClient, connectRedis } = require("../cache/redis");
 const { validateBody } = require("../middleware/validate");
 const { createUserSchema } = require("../validation/userSchemas");
+
+const USERS_CACHE_KEY = "users:all";
+const USERS_CACHE_TTL_SEC = Math.max(
+  5,
+  Number(process.env.USERS_CACHE_TTL_SEC || 30)
+);
 
 // Route to create a new table
 router.post("/create-table", async (req, res) => {
@@ -41,6 +48,15 @@ router.post("/users", validateBody(createUserSchema), async (req, res) => {
         `;
     const values = [name, email, age ?? null];
     const result = await pool.query(query, values);
+    try {
+      const isRedisReady = await connectRedis();
+      if (isRedisReady && redisClient.isOpen) {
+        await redisClient.del(USERS_CACHE_KEY);
+        console.log("[Redis] cache invalidated: users");
+      }
+    } catch (cacheError) {
+      console.error("[Redis] cache invalidate error:", cacheError);
+    }
     return res.status(201).json(result.rows[0]);
   } catch (error) {
     console.error("INSERT error:", error);
@@ -51,30 +67,43 @@ router.post("/users", validateBody(createUserSchema), async (req, res) => {
 });
 router.get("/users", async (req, res) => {
   try {
-    // 1) Добавляем новую строку (тестовые данные)
-    const insertResult = await pool.query(
-      `
-        INSERT INTO public.users (name, email)
-        VALUES ($1, $2)
-        RETURNING id, name, email, created_at;
-        `,
-      [
-        "Test User",
-        `test_${Date.now()}@example.com`, // уникальный email, чтобы не упасть на UNIQUE
-      ]
-    );
+    const isRedisReady = await connectRedis();
+    if (isRedisReady && redisClient.isOpen) {
+      const cachedUsers = await redisClient.get(USERS_CACHE_KEY);
+      if (cachedUsers) {
+        console.log("[Redis] cache hit: users");
+        try {
+          return res.json({
+            source: "cache",
+            users: JSON.parse(cachedUsers),
+          });
+        } catch (parseError) {
+          console.error("[Redis] cache parse error:", parseError);
+        }
+      }
+      console.log("[Redis] cache miss: users");
+    } else {
+      console.log("[Redis] cache skipped: not connected");
+    }
 
-    // 2) Читаем все строки и возвращаем
     const selectResult = await pool.query(`
         SELECT id, name, email,  created_at
         FROM public.users
         ORDER BY id DESC;
       `);
 
-    return res.json({
-      inserted: insertResult.rows[0],
-      users: selectResult.rows,
-    });
+    const users = selectResult.rows;
+
+    if (isRedisReady && redisClient.isOpen) {
+      await redisClient.setEx(
+        USERS_CACHE_KEY,
+        USERS_CACHE_TTL_SEC,
+        JSON.stringify(users)
+      );
+      console.log(`[Redis] cache set: users ttl=${USERS_CACHE_TTL_SEC}s`);
+    }
+
+    return res.json({ source: "db", users });
   } catch (error) {
     console.error("GET /users error:", error);
     return res
